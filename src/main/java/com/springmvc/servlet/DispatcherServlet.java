@@ -13,10 +13,13 @@ import javax.servlet.http.HttpServletResponse;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.UnsupportedEncodingException;
 import java.lang.reflect.Field;
 
 import java.lang.reflect.Method;
+import java.net.URISyntaxException;
 import java.net.URL;
+import java.net.URLDecoder;
 import java.util.*;
 
 public class DispatcherServlet extends HttpServlet {
@@ -30,7 +33,7 @@ public class DispatcherServlet extends HttpServlet {
     //  核心Ioc容器,保存所有初始化的bean
     private Map<String, Object> ioc = new HashMap<String, Object>();
 
-    private Map<String,Method> handlerMapping = new HashMap<String, Method>();
+    private Map<String, Method> handlerMapping = new HashMap<String, Method>();
 
 
     @Override
@@ -41,7 +44,11 @@ public class DispatcherServlet extends HttpServlet {
         doLoadConfig(config.getInitParameter("contextConfigLocation"));
 
         // 2 根据配置文件扫描所有的相关的类
-        doScanner(properties.getProperty("scanPackage"));
+        try {
+            doScanner(properties.getProperty("scanPackage"));
+        } catch (URISyntaxException e) {
+            e.printStackTrace();
+        }
 
         // 3 初始化所有的相关类的实例,并将器放入到IOC容器之中(Map)
         doInstance();
@@ -56,11 +63,15 @@ public class DispatcherServlet extends HttpServlet {
     }
 
     private void initHandlerMapping() {
-        if (ioc.isEmpty()) {return;}
+        if (ioc.isEmpty()) {
+            return;
+        }
         for (Map.Entry<String, Object> entry : ioc.entrySet()) {
             Class<?> clazz = entry.getValue().getClass();
 
-            if (!clazz.isAnnotationPresent(Controller.class)) {continue;}
+            if (!clazz.isAnnotationPresent(Controller.class)) {
+                continue;
+            }
 
             String baseUrl = "";
             if (clazz.isAnnotationPresent(RequestMapping.class)) {
@@ -70,13 +81,15 @@ public class DispatcherServlet extends HttpServlet {
 
             Method[] methods = clazz.getMethods();
             for (Method method : methods) {
-                if (!method.isAnnotationPresent(RequestMapping.class)) {continue;}
+                if (!method.isAnnotationPresent(RequestMapping.class)) {
+                    continue;
+                }
 
                 RequestMapping requestMapping = method.getAnnotation(RequestMapping.class);
                 String url = (baseUrl + requestMapping.value()).replaceAll("/+", "/");
 
-                handlerMapping.put(url,method);
-                System.out.println("mapping:" + url + method);
+                handlerMapping.put(url, method);
+                System.out.println("mapping: " + url + method);
             }
 
 
@@ -84,14 +97,18 @@ public class DispatcherServlet extends HttpServlet {
     }
 
     private void doAutowired() {
-        if (ioc.isEmpty()) {return; }
+        if (ioc.isEmpty()) {
+            return;
+        }
 
         for (Map.Entry<String, Object> entry : ioc.entrySet()) {
             // 获取所有的字段
             Field[] fields = entry.getValue().getClass().getDeclaredFields();
             for (Field field : fields) {
                 // 只有加了Autowired注解的成员变量才注入
-                if (!field.isAnnotationPresent(Autowired.class)) {return;}
+                if (!field.isAnnotationPresent(Autowired.class)) {
+                    return;
+                }
 
                 Autowired autowired = field.getAnnotation(Autowired.class);
                 String beanName = autowired.value().trim();
@@ -102,7 +119,7 @@ public class DispatcherServlet extends HttpServlet {
                 // 强制授权访问,暴力反射
                 field.setAccessible(true);
                 try {
-                    field.set(entry.getValue(),ioc.get(beanName));
+                    field.set(entry.getValue(), ioc.get(beanName));
                 } catch (IllegalAccessException e) {
                     e.printStackTrace();
                     continue;
@@ -132,7 +149,7 @@ public class DispatcherServlet extends HttpServlet {
                 if (clazz.isAnnotationPresent(Controller.class)) {
                     //  1 key默认用类名首字母小写
                     String beanName = lowerFisrtCase(clazz.getSimpleName());
-                    ioc.put(beanName,clazz.newInstance());
+                    ioc.put(beanName, clazz.newInstance());
 
 
                 } else if (clazz.isAnnotationPresent(Service.class)) {
@@ -143,13 +160,13 @@ public class DispatcherServlet extends HttpServlet {
                         beanName = lowerFisrtCase(clazz.getSimpleName());
                     }
                     Object instance = clazz.newInstance();
-                    ioc.put(beanName,instance);
+                    ioc.put(beanName, instance);
 
                     // 3 如果是接口的话,用接口的类型作为key
                     Class<?>[] interfaces = clazz.getInterfaces();
                     for (Class<?> i : interfaces) {
                         // 将接口类型作为key
-                        ioc.put(i.getSimpleName(),instance);
+                        ioc.put(i.getSimpleName(), instance);
                     }
                 } else {
                     continue;
@@ -172,7 +189,7 @@ public class DispatcherServlet extends HttpServlet {
 
     @Override
     protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
-        this.doPost(req,resp);
+        this.doPost(req, resp);
 
     }
 
@@ -256,16 +273,31 @@ public class DispatcherServlet extends HttpServlet {
     }
 
 
-    private void doScanner(String packageName) {
-        URL url  =this.getClass().getClassLoader().getResource( packageName.replaceAll("\\.", "/"));
-        File dir = new File(url.getFile());
+    private void doScanner(String packageName) throws URISyntaxException {
+        /****
+         *  getResource 路径中不能有空格,否则File类不能使用
+         *  URL url =  this.getClass().getClassLoader().getResource(packageName.replaceAll("\\.", "/"));
+         *  File dir = new File(url.getPath());
+         */
+
+        /*URL url =  this.getClass().getClassLoader().getResource(packageName.replaceAll("\\.", "/"));
+        String path = null;
+        try {
+            path = URLDecoder.decode(url.getPath(),"UTF-8");
+        } catch (UnsupportedEncodingException e) {
+            e.printStackTrace();
+        }*/
+
+
+        String path = this.getClass().getClassLoader().getResource(packageName.replaceAll("\\.", "/")).toURI().getPath();
+        File dir = new File(path);
 
         for (File file : dir.listFiles()) {
-            if(file.isDirectory()){
+            if (file.isDirectory()) {
                 //递归读取包
-                doScanner(packageName+"."+file.getName());
-            }else{
-                String className =packageName +"." +file.getName().replace(".class", "");
+                doScanner(packageName + "." + file.getName());
+            } else {
+                String className = packageName + "." + file.getName().replace(".class", "");
                 classNames.add(className);
             }
         }
